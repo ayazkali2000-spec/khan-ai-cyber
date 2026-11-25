@@ -1,0 +1,114 @@
+﻿name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and release ${{ github.ref_name }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify TypeScript
+        run: bun run lint
+
+      - name: Build clean Windows web bundle
+        shell: bash
+        run: |
+          rm -rf dist release-assets
+          mkdir -p release-assets
+          bun run build
+          test -d dist
+          cp -a dist/. release-assets/windows-web/
+          (cd release-assets && zip -r "windows-web.zip" windows-web)
+
+      - name: Package Windows web bundle
+        shell: bash
+        run: |
+          test -f release-assets/windows-web.zip
+          sha256sum release-assets/windows-web.zip > release-assets/windows-web.zip.sha256
+
+      - name: Detect Android project and SDK
+        id: android
+        shell: bash
+        run: |
+          if [ -d "android/app" ] && [ -f "android/gradlew" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Android build skipped: android/app or android/gradlew is unavailable."
+          fi
+          if [ -z "${ANDROID_SDK_ROOT:-}" ] && [ -z "${ANDROID_HOME:-}" ]; then
+            echo "sdk_available=false" >> "$GITHUB_OUTPUT"
+            echo "Android SDK is unavailable on this runner; Gradle/APK build will be skipped."
+          else
+            echo "sdk_available=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Java 17
+        if: steps.android.outputs.available == 'true' && steps.android.outputs.sdk_available == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Set up Android SDK
+        if: steps.android.outputs.available == 'true' && steps.android.outputs.sdk_available == 'true'
+        uses: android-actions/setup-android@v3
+
+      - name: Build Android APK
+        if: steps.android.outputs.available == 'true' && steps.android.outputs.sdk_available == 'true'
+        shell: bash
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew :app:assembleDebug
+
+      - name: Attach Android APK where available
+        if: steps.android.outputs.available == 'true' && steps.android.outputs.sdk_available == 'true'
+        shell: bash
+        run: |
+          mkdir -p release-assets/android
+          find android/app/build/outputs/apk -type f -name '*.apk' -exec cp {} release-assets/android/ \;
+          if [ -n "$(find release-assets/android -maxdepth 1 -type f -name '*.apk' -print -quit)" ]; then
+            (cd release-assets/android && sha256sum *.apk > SHA256SUMS.txt)
+          else
+            echo "No APK was produced; the Android asset will be omitted."
+          fi
+
+      - name: Check release artifacts
+        shell: bash
+        run: |
+          echo "Release artifacts:"
+          find release-assets -type f -not -path '*/.env*' -not -name '*.log' -maxdepth 4 -print
+          forbidden=$(find release-assets -type f \( -name '.env' -o -name '.env.*' -o -name '*.keystore' -o -name '*.jks' -o -name '*.log' \) -print)
+          if [ -n "$forbidden" ]; then
+            echo "Sensitive or local artifact found in release-assets:" >&2
+            echo "$forbidden" >&2
+            exit 1
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release-assets/windows-web.zip
+            release-assets/windows-web.zip.sha256
+            release-assets/android/*.apk
+            release-assets/android/SHA256SUMS.txt
