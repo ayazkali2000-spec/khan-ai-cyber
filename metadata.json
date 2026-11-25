@@ -1,0 +1,6 @@
+{
+  "name": "KHAN AI — Cyber Defense & Evidence Workbench",
+  "description": "Defensive cybersecurity, WhatsApp & financial scam triage, account hardening, and lawful evidence-organization assistant built for KHAN AI (Developed by: ایاز احمد خان).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
